@@ -1,633 +1,496 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Multiplayer Bingo</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <style>
-    body {
-      font-family: 'Inter', sans-serif;
-      background-color: #0d1117; /* Dark theme background */
-      color: #c9d1d9; /* Light gray text */
-    }
-    .animate-fade-in {
-      animation: fadeIn 0.5s ease-in-out;
-    }
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(20px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-    .bingo-grid-container {
-      display: grid;
-      gap: 0.5rem;
-      /* Corrected to use the CSS variable */
-      grid-template-columns: repeat(var(--grid-size), minmax(0, 1fr));
-    }
-    .bingo-cell {
-      aspect-ratio: 1 / 1;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-weight: bold;
-      transition: all 0.3s ease-in-out;
-      border-radius: 0.5rem;
-      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    }
-  </style>
-</head>
-<body>
-  <div id="root"></div>
-
-  <script type="module">
-    import React, { useState, useEffect, useRef, useReducer, createContext, useContext } from 'https://esm.sh/react@18.2.0';
-    import ReactDOM from 'https://esm.sh/react-dom@18.2.0/client';
-
-    // Firebase Imports
-    import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
-    import { getAuth, signInAnonymously, signInWithCustomToken } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-    import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
-
-    // --- Global Context for Firebase and Auth ---
-    const AppContext = createContext();
-
-    // --- Main App Component ---
-    function App() {
-      const [db, setDb] = useState(null);
-      const [auth, setAuth] = useState(null);
-      const [userId, setUserId] = useState(null);
-      const [isAuthReady, setIsAuthReady] = useState(false);
-      const [gameId, setGameId] = useState(null);
-      const [gameState, setGameState] = useState('lobby'); // 'lobby', 'game', 'leaderboard'
-      const [loading, setLoading] = useState(true);
-
-      // Initialize Firebase and handle authentication
-      useEffect(() => {
-        const initFirebase = async () => {
-          try {
-            const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-            const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-            const app = initializeApp(firebaseConfig);
-            const firestoreDb = getFirestore(app);
-            const firestoreAuth = getAuth(app);
-
-            // Sign in the user
-            if (initialAuthToken) {
-              await signInWithCustomToken(firestoreAuth, initialAuthToken);
-            } else {
-              await signInAnonymously(firestoreAuth);
-            }
-
-            // Listen for auth state changes to get the user ID
-            const unsubscribeAuth = firestoreAuth.onAuthStateChanged(user => {
-              if (user) {
-                setUserId(user.uid);
-                setIsAuthReady(true);
-              }
-            });
-
-            setDb(firestoreDb);
-            setAuth(firestoreAuth);
-            setLoading(false);
-
-            return () => unsubscribeAuth();
-          } catch (error) {
-            console.error('Failed to initialize Firebase or authenticate:', error);
-            setLoading(false);
-          }
-        };
-        initFirebase();
-      }, []);
-
-      if (loading || !isAuthReady) {
-        return (
-          <div className="flex items-center justify-center min-h-screen bg-gray-900 text-white">
-            <div className="animate-spin rounded-full h-32 w-32 border-t-2 border-b-2 border-purple-500"></div>
-            <p className="ml-4 text-xl">Loading...</p>
-          </div>
-        );
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multiplayer Bingo</title>
+    <!-- Use Tailwind CSS for modern styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      body { font-family: 'Inter', sans-serif; }
+      /* Custom styles for the board grid */
+      .bingo-grid {
+        display: grid;
+        grid-template-columns: repeat(var(--grid-size), 1fr);
+        gap: 0.5rem;
       }
+      .bingo-cell {
+        aspect-ratio: 1 / 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 0.5rem;
+        font-weight: bold;
+        transition: transform 0.2s, background-color 0.2s;
+        cursor: pointer;
+      }
+      .bingo-cell:hover {
+        transform: scale(1.05);
+      }
+      .highlighted {
+        background-color: #10B981; /* Tailwind's green-500 */
+        color: white;
+      }
+    </style>
+</head>
+<body class="bg-gray-900 text-white flex justify-center items-center min-h-screen">
 
-      return (
-        <AppContext.Provider value={{ db, auth, userId, isAuthReady, setGameId, setGameState }}>
-          <main className="bg-gray-950 text-white min-h-screen font-sans antialiased flex flex-col items-center p-4 md:p-8">
-            <header className="mb-8 text-center">
-              <h1 className="text-4xl md:text-6xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-600">
-                Multiplayer Bingo
-              </h1>
-              <p className="mt-2 text-gray-400 text-lg md:text-xl">
-                Create a room and play with your friends!
-              </p>
-            </header>
-            {gameState === 'lobby' && <Lobby />}
-            {gameState === 'game' && <Game gameId={gameId} />}
-            {gameState === 'leaderboard' && <Leaderboard gameId={gameId} />}
-          </main>
-        </AppContext.Provider>
-      );
+<div id="app" class="p-4 w-full max-w-2xl">
+    <!-- The game UI will be rendered here dynamically -->
+</div>
+
+<!-- uuid library for unique IDs -->
+<script type="module">
+    import { v4 as uuidv4 } from 'https://jspm.dev/uuid';
+
+    // This is a free, simple public API for JSON data. No API key or authentication is needed.
+    // It's not as robust as Firebase but will work for this application.
+    const API_URL = 'https://json-proxy.glitch.me/api/games';
+
+    let userId;
+    let userName = '';
+    let gameId = '';
+    let gameData = null;
+    let userBoard = null;
+    let view = 'home';
+    let boardSize = 5;
+    let error = '';
+    let isSyncing = false;
+
+    const appContainer = document.getElementById('app');
+
+    // --- Core Game Logic ---
+    function generateBoard(size) {
+        const totalNumbers = size * size;
+        const numbers = Array.from({ length: totalNumbers }, (_, i) => i + 1);
+        const board = [];
+        while (numbers.length > 0) {
+            const randomIndex = Math.floor(Math.random() * numbers.length);
+            board.push(numbers.splice(randomIndex, 1)[0]);
+        }
+        return board;
     }
 
-    // --- Lobby Component ---
-    function Lobby() {
-      const { db, userId, setGameId, setGameState, isAuthReady } = useContext(AppContext);
-      const [boardSize, setBoardSize] = useState(5);
-      const [gameCode, setGameCode] = useState('');
-      const [players, setPlayers] = useState([]);
-      const [isHost, setIsHost] = useState(false);
-      const [loading, setLoading] = useState(false);
-      const [error, setError] = useState('');
-      const gameRef = useRef(null);
-
-      useEffect(() => {
-        if (!isAuthReady || !gameCode) return;
-        const gameDocRef = doc(db, 'artifacts', typeof __app_id !== 'undefined' ? __app_id : 'default-app-id', 'public', 'data', 'bingo_games', gameCode);
-        gameRef.current = gameDocRef;
-
-        const unsubscribe = onSnapshot(gameDocRef, async (docSnap) => {
-          if (docSnap.exists()) {
-            const gameData = docSnap.data();
-            setPlayers(Object.values(gameData.players || {}));
-            if (gameData.status === 'playing') {
-              setGameId(gameCode);
-              setGameState('game');
-            } else if (gameData.status === 'finished') {
-              setGameId(gameCode);
-              setGameState('leaderboard');
-            }
-          } else {
-            setError('Game not found.');
-          }
-        });
-
-        return () => unsubscribe();
-      }, [gameCode, db, isAuthReady, setGameId, setGameState]);
-
-      const handleCreateGame = async () => {
-        if (!isAuthReady || loading) return;
-        setLoading(true);
-        setError('');
-        const newGameId = Math.random().toString(36).substring(2, 8).toUpperCase();
-        const newGameDocRef = doc(db, 'artifacts', typeof __app_id !== 'undefined' ? __app_id : 'default-app-id', 'public', 'data', 'bingo_games', newGameId);
-
-        const player = {
-          id: userId,
-          isHost: true,
-          name: `Player ${Math.floor(Math.random() * 1000)}`,
-        };
-
-        try {
-          await setDoc(newGameDocRef, {
-            boardSize: boardSize,
-            createdAt: serverTimestamp(),
-            hostId: userId,
-            status: 'lobby',
-            players: { [userId]: player },
-            calledNumbers: [],
-          });
-          setGameCode(newGameId);
-          setIsHost(true);
-        } catch (e) {
-          console.error('Error creating document:', e);
-          setError('Failed to create game. Please try again.');
-        } finally {
-          setLoading(false);
-        }
-      };
-
-      const handleJoinGame = async () => {
-        if (!isAuthReady || loading) return;
-        setLoading(true);
-        setError('');
-        const gameDocRef = doc(db, 'artifacts', typeof __app_id !== 'undefined' ? __app_id : 'default-app-id', 'public', 'data', 'bingo_games', gameCode);
-
-        try {
-          const docSnap = await getDoc(gameDocRef);
-          if (docSnap.exists() && docSnap.data().status === 'lobby') {
-            const player = {
-              id: userId,
-              isHost: false,
-              name: `Player ${Math.floor(Math.random() * 1000)}`,
-            };
-            await updateDoc(gameDocRef, { [`players.${userId}`]: player });
-          } else {
-            setError('Game not found or has already started.');
-          }
-        } catch (e) {
-          console.error('Error joining game:', e);
-          setError('Failed to join game. Please check the code.');
-        } finally {
-          setLoading(false);
-        }
-      };
-
-      const handleStartGame = async () => {
-        if (!isHost || !gameRef.current || loading) return;
-        setLoading(true);
-        setError('');
-        try {
-          const gameData = (await getDoc(gameRef.current)).data();
-          const players = Object.keys(gameData.players);
-          const boardSize = gameData.boardSize;
-          const boardRange = boardSize * boardSize;
-          const updates = {
-            status: 'playing',
-            turn: players[0],
-            boards: {},
-            playerLines: {},
-          };
-
-          players.forEach(playerId => {
-            const allNumbers = Array.from({ length: boardRange }, (_, i) => i + 1);
-            shuffle(allNumbers);
-            const board = Array.from({ length: boardSize }, (_, rowIdx) =>
-              allNumbers.slice(rowIdx * boardSize, (rowIdx + 1) * boardSize)
-            );
-            updates.boards[playerId] = JSON.stringify(board);
-            updates.playerLines[playerId] = 0;
-          });
-          await updateDoc(gameRef.current, updates);
-        } catch (e) {
-          console.error('Error starting game:', e);
-          setError('Failed to start game.');
-        } finally {
-          setLoading(false);
-        }
-      };
-
-      const shuffle = (array) => {
-        for (let i = array.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [array[i], array[j]] = [array[j], array[i]];
-        }
-      };
-
-      return (
-        <div className="bg-gray-800 rounded-xl shadow-lg p-6 md:p-8 w-full max-w-lg space-y-6 animate-fade-in">
-          <h2 className="text-2xl md:text-3xl font-semibold text-center text-gray-200">
-            Create or Join a Game
-          </h2>
-          <div className="space-y-4">
-            <label className="block text-gray-400">Board Size (e.g., 5, 7, 10):</label>
-            <input
-              type="number"
-              value={boardSize}
-              onChange={(e) => setBoardSize(Number(e.target.value))}
-              className="w-full bg-gray-700 text-white rounded-lg p-3 focus:ring-2 focus:ring-purple-500 focus:outline-none transition-colors duration-200"
-              min="3" max="15"
-            />
-            <button
-              onClick={handleCreateGame}
-              disabled={loading || !isAuthReady}
-              className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white font-bold py-3 px-6 rounded-lg transition-all duration-300 shadow-lg transform hover:scale-105 disabled:opacity-50"
-            >
-              {loading ? 'Creating...' : 'Create New Game'}
-            </button>
-          </div>
-          <div className="flex items-center justify-center space-x-2"><span className="text-gray-500">- OR -</span></div>
-          <div className="space-y-4">
-            <label className="block text-gray-400">Join Game with Code:</label>
-            <div className="flex space-x-2">
-              <input
-                type="text"
-                value={gameCode}
-                onChange={(e) => setGameCode(e.target.value.toUpperCase())}
-                className="flex-grow bg-gray-700 text-white rounded-lg p-3 focus:ring-2 focus:ring-purple-500 focus:outline-none transition-colors duration-200 uppercase tracking-widest text-center font-mono"
-                placeholder="GAMECODE"
-              />
-              <button
-                onClick={handleJoinGame}
-                disabled={loading || !isAuthReady || !gameCode}
-                className="bg-purple-500 hover:bg-purple-600 text-white font-bold py-3 px-6 rounded-lg transition-colors duration-200 shadow-lg transform hover:scale-105 disabled:opacity-50"
-              >
-                Join
-              </button>
-            </div>
-          </div>
-          {gameCode && (
-            <div className="p-4 bg-gray-700 rounded-lg text-center shadow-inner">
-              <h3 className="text-xl font-bold text-gray-200">Game Code: {gameCode}</h3>
-              <p className="text-sm text-gray-400 mt-1">Share this code with your friends!</p>
-            </div>
-          )}
-          {error && <p className="text-red-500 text-center mt-4">{error}</p>}
-          {players.length > 0 && (
-            <div className="space-y-4">
-              <h3 className="text-xl font-semibold text-gray-300">Players in Lobby ({players.length}):</h3>
-              <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {players.map(player => (
-                  <li key={player.id} className="bg-gray-700 text-gray-300 p-2 rounded-lg flex items-center justify-between">
-                    <span>{player.name}</span>
-                    {player.isHost && <span className="text-sm font-semibold text-purple-400">Host</span>}
-                  </li>
-                ))}
-              </ul>
-              {isHost && players.length > 1 && (
-                <button
-                  onClick={handleStartGame}
-                  disabled={loading}
-                  className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-lg transition-colors duration-200 shadow-lg transform hover:scale-105 disabled:opacity-50"
-                >
-                  Start Game
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      );
-    }
-
-    // --- Game Component ---
-    function Game({ gameId }) {
-      const { db, userId, setGameState } = useContext(AppContext);
-      const [game, setGame] = useState(null);
-      const [myBoard, setMyBoard] = useState(new Set());
-      const [markedNumbers, setMarkedNumbers] = useState(new Set());
-      const [myLines, setMyLines] = useState(0);
-      const [loading, setLoading] = useState(true);
-      const [turnNumber, setTurnNumber] = useState('');
-      const [message, setMessage] = useState('');
-      const boardSizeRef = useRef(null);
-
-      const [state, dispatch] = useReducer((state, action) => {
-        switch (action.type) {
-          case 'INIT_GAME':
-            return {
-              ...state,
-              boardSize: action.payload.boardSize,
-              myBoard: JSON.parse(action.payload.myBoard),
-              isHost: action.payload.isHost,
-              hostId: action.payload.hostId,
-            };
-          case 'UPDATE_GAME_STATE':
-            return {
-              ...state,
-              status: action.payload.status,
-              turn: action.payload.turn,
-              calledNumbers: action.payload.calledNumbers,
-              playerLines: action.payload.playerLines,
-              players: action.payload.players,
-            };
-          case 'UPDATE_MARKED_NUMBERS':
-            return { ...state, markedNumbers: action.payload };
-          case 'UPDATE_MY_LINES':
-            return { ...state, myLines: action.payload };
-          default:
-            return state;
-        }
-      }, {
-        boardSize: 0, myBoard: [], status: 'playing', turn: '', calledNumbers: [], playerLines: {}, players: {},
-        isHost: false, hostId: '', markedNumbers: new Set(), myLines: 0,
-      });
-
-      useEffect(() => {
-        if (!db || !gameId) return;
-        const gameDocRef = doc(db, 'artifacts', typeof __app_id !== 'undefined' ? __app_id : 'default-app-id', 'public', 'data', 'bingo_games', gameId);
-        const unsubscribe = onSnapshot(gameDocRef, (docSnap) => {
-          if (docSnap.exists()) {
-            const gameData = docSnap.data();
-            dispatch({ type: 'UPDATE_GAME_STATE', payload: gameData });
-            if (loading) {
-              boardSizeRef.current = gameData.boardSize;
-              const myBoardString = gameData.boards[userId];
-              if (myBoardString) {
-                dispatch({ type: 'INIT_GAME', payload: {
-                    boardSize: gameData.boardSize, myBoard: myBoardString,
-                    isHost: gameData.hostId === userId, hostId: gameData.hostId,
-                  }
-                });
-                setLoading(false);
-              }
-            }
-          } else {
-            setGameState('lobby');
-          }
-        });
-        return () => unsubscribe();
-      }, [db, gameId, userId, setGameState, loading]);
-
-      useEffect(() => {
-        if (!state.myBoard.length) return;
+    function checkForBingo(board, size, calledNumbers) {
+        const isHighlighted = (num) => calledNumbers.includes(num);
         let lines = 0;
-        const board = state.myBoard;
-        const size = state.boardSize;
-        for (let r = 0; r < size; r++) {
-          if (board[r].every(num => state.markedNumbers.has(num))) lines++;
+        const grid = [];
+        for (let i = 0; i < size; i++) {
+            grid.push(board.slice(i * size, (i + 1) * size));
         }
-        for (let c = 0; c < size; c++) {
-          let colComplete = true;
-          for (let r = 0; r < size; r++) {
-            if (!state.markedNumbers.has(board[r][c])) {
-              colComplete = false;
-              break;
-            }
-          }
-          if (colComplete) lines++;
+
+        // Check rows
+        for (let i = 0; i < size; i++) {
+            if (grid[i].every(num => isHighlighted(num))) lines++;
         }
+
+        // Check columns
+        for (let i = 0; i < size; i++) {
+            if (grid.every(row => isHighlighted(row[i]))) lines++;
+        }
+
+        // Check main diagonal
         let diag1Complete = true;
         for (let i = 0; i < size; i++) {
-          if (!state.markedNumbers.has(board[i][i])) {
-            diag1Complete = false;
-            break;
-          }
+            if (!isHighlighted(grid[i][i])) {
+                diag1Complete = false;
+                break;
+            }
         }
         if (diag1Complete) lines++;
+
+        // Check anti-diagonal
         let diag2Complete = true;
         for (let i = 0; i < size; i++) {
-          if (!state.markedNumbers.has(board[i][size - 1 - i])) {
-            diag2Complete = false;
-            break;
-          }
+            if (!isHighlighted(grid[i][size - 1 - i])) {
+                diag2Complete = false;
+                break;
+            }
         }
         if (diag2Complete) lines++;
 
-        if (lines !== myLines) {
-          setMyLines(lines);
-          updateMyLinesInDb(lines);
-          if (lines >= size) { updateGameStatus('finished'); }
-        }
-      }, [state.myBoard, state.markedNumbers]);
-
-      const handleCallNumber = async () => {
-        if (state.turn !== userId || !turnNumber) {
-          setMessage("It's not your turn or you haven't entered a number.");
-          return;
-        }
-        const number = parseInt(turnNumber, 10);
-        if (isNaN(number) || state.calledNumbers.includes(number)) {
-          setMessage("Please enter a valid, uncalled number.");
-          return;
-        }
-        setMessage(''); setTurnNumber('');
-        const gameDocRef = doc(db, 'artifacts', typeof __app_id !== 'undefined' ? __app_id : 'default-app-id', 'public', 'data', 'bingo_games', gameId);
-        const currentPlayers = Object.keys(state.players);
-        const myIndex = currentPlayers.indexOf(userId);
-        const nextTurnIndex = (myIndex + 1) % currentPlayers.length;
-        const nextTurnPlayerId = currentPlayers[nextTurnIndex];
-        try {
-          await updateDoc(gameDocRef, {
-            calledNumbers: [...state.calledNumbers, number],
-            turn: nextTurnPlayerId,
-          });
-        } catch (e) {
-          console.error('Error calling number:', e);
-          setMessage('Failed to call number. Try again.');
-        }
-      };
-
-      const handleMarkNumber = (number) => {
-        if (state.calledNumbers.includes(number)) {
-          const newMarkedNumbers = new Set(state.markedNumbers);
-          if (newMarkedNumbers.has(number)) {
-            newMarkedNumbers.delete(number);
-          } else {
-            newMarkedNumbers.add(number);
-          }
-          dispatch({ type: 'UPDATE_MARKED_NUMBERS', payload: newMarkedNumbers });
-        }
-      };
-
-      const updateMyLinesInDb = async (lines) => {
-        if (!db || !gameId) return;
-        const gameDocRef = doc(db, 'artifacts', typeof __app_id !== 'undefined' ? __app_id : 'default-app-id', 'public', 'data', 'bingo_games', gameId);
-        try {
-          await updateDoc(gameDocRef, { [`playerLines.${userId}`]: lines, });
-        } catch (e) {
-          console.error('Error updating lines:', e);
-        }
-      };
-
-      const updateGameStatus = async (status) => {
-        if (!db || !gameId) return;
-        const gameDocRef = doc(db, 'artifacts', typeof __app_id !== 'undefined' ? __app_id : 'default-app-id', 'public', 'data', 'bingo_games', gameId);
-        try {
-          await updateDoc(gameDocRef, { status: status, });
-        } catch (e) { console.error('Error updating game status:', e); }
-      };
-
-      return (
-        <div className="bg-gray-800 rounded-xl shadow-lg p-6 md:p-8 w-full max-w-5xl space-y-6 animate-fade-in">
-          <h2 className="text-3xl font-bold text-center text-gray-200">Bingo Time!</h2>
-          <p className="text-center text-gray-400">
-            Board Size: <span className="font-semibold text-white">{state.boardSize}x{state.boardSize}</span>
-            <br />
-            Bingo Condition: <span className="font-semibold text-white">{state.boardSize} lines</span>
-          </p>
-          {state.status === 'playing' && (
-            <div className="text-center p-4 bg-gray-700 rounded-lg shadow-inner">
-              <p className="text-lg font-semibold text-purple-400 animate-pulse">
-                {state.turn === userId ? "It's your turn to call a number!" : `Waiting for ${state.players[state.turn]?.name} to call a number...`}
-              </p>
-              <p className="mt-2 text-gray-300">
-                Current Lines: <span className="font-bold">{myLines}</span>
-              </p>
-            </div>
-          )}
-          {state.myBoard.length > 0 && (
-            <div className="bingo-grid-container grid p-4 bg-gray-700 rounded-xl shadow-inner mx-auto"
-                 style={{ '--grid-size': state.boardSize }}>
-              {state.myBoard.flat().map((number, index) => (
-                <div
-                  key={index}
-                  className={`
-                    bingo-cell
-                    ${state.calledNumbers.includes(number) ? 'bg-purple-600' : 'bg-gray-800'}
-                    ${state.markedNumbers.has(number) ? 'border-4 border-yellow-400 text-yellow-300 shadow-xl' : 'text-gray-200'}
-                  `}
-                  onClick={() => handleMarkNumber(number)}
-                >
-                  {number}
-                </div>
-              ))}
-            </div>
-          )}
-          <div className="mt-8 space-y-4">
-            <h3 className="text-xl font-semibold text-center text-gray-300">Called Numbers</h3>
-            <div className="flex flex-wrap gap-2 justify-center max-h-40 overflow-y-auto p-2 bg-gray-700 rounded-lg">
-              {state.calledNumbers.map((num, idx) => (
-                <span key={idx} className="bg-purple-500 text-white text-xs font-bold px-2 py-1 rounded-full">{num}</span>
-              ))}
-            </div>
-            {state.turn === userId && (
-              <div className="flex flex-col sm:flex-row gap-4 items-center justify-center mt-6">
-                <input
-                  type="number"
-                  value={turnNumber}
-                  onChange={(e) => setTurnNumber(e.target.value)}
-                  className="w-full sm:w-1/2 bg-gray-700 text-white rounded-lg p-3 text-center focus:ring-2 focus:ring-purple-500 focus:outline-none"
-                  placeholder="Enter your number"
-                  min="1"
-                  max={boardSizeRef.current * boardSizeRef.current}
-                />
-                <button
-                  onClick={handleCallNumber}
-                  disabled={loading}
-                  className="w-full sm:w-auto bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-lg transition-colors duration-200 shadow-lg transform hover:scale-105 disabled:opacity-50"
-                >
-                  Call Number
-                </button>
-              </div>
-            )}
-            {message && <p className="text-red-500 text-center mt-4">{message}</p>}
-          </div>
-        </div>
-      );
-    }
-
-    // --- Leaderboard Component ---
-    function Leaderboard({ gameId }) {
-      const { db } = useContext(AppContext);
-      const [players, setPlayers] = useState([]);
-      const [loading, setLoading] = useState(true);
-
-      useEffect(() => {
-        if (!db || !gameId) return;
-        const fetchLeaderboard = async () => {
-          const gameDocRef = doc(db, 'artifacts', typeof __app_id !== 'undefined' ? __app_id : 'default-app-id', 'public', 'data', 'bingo_games', gameId);
-          const docSnap = await getDoc(gameDocRef);
-          if (docSnap.exists()) {
-            const gameData = docSnap.data();
-            // Corrected player sorting logic
-            const sortedPlayers = Object.values(gameData.players).map(player => ({
-                ...player,
-                lines: gameData.playerLines[player.id] || 0
-            })).sort((a, b) => b.lines - a.lines);
-            setPlayers(sortedPlayers);
-          }
-          setLoading(false);
-        };
-        fetchLeaderboard();
-      }, [db, gameId]);
-
-      if (loading) {
-        return (
-          <div className="flex items-center justify-center text-white">
-            <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-purple-500"></div>
-            <p className="ml-4 text-xl">Loading Leaderboard...</p>
-          </div>
-        );
-      }
-
-      return (
-        <div className="bg-gray-800 rounded-xl shadow-lg p-6 md:p-8 w-full max-w-lg space-y-6 animate-fade-in">
-          <h2 className="text-3xl font-bold text-center text-gray-200">Leaderboard</h2>
-          <ul className="space-y-4">
-            {players.map((player, index) => (
-              <li key={player.id} className={`p-4 rounded-lg flex justify-between items-center transition-all duration-300 ${index === 0 ? 'bg-yellow-500 text-black shadow-lg transform scale-105' : 'bg-gray-700 text-white'}`}>
-                <span className="font-bold text-lg">{index + 1}. {player.name}</span>
-                <span className="text-sm">Lines: {player.lines}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      );
+        return lines;
     }
     
-    // Render the App
-    const container = document.getElementById('root');
-    const root = ReactDOM.createRoot(container);
-    root.render(React.createElement(App));
-  </script>
+    async function handleWin(winnerId) {
+        if (!gameData) return;
+        
+        // Finalize the leaderboard before updating the game state
+        const leaderboard = gameData.players.map(p => ({
+            name: p.name,
+            lines: gameData.boards[p.id] ? checkForBingo(gameData.boards[p.id].board, gameData.boardSize, gameData.calledNumbers) : 0,
+            isWinner: p.id === winnerId
+        })).sort((a, b) => b.lines - a.lines);
+
+        gameData.status = 'finished';
+        gameData.leaderboard = leaderboard;
+        await updateGameData(gameId, gameData);
+        syncGameData();
+    }
+
+    // --- API Communication Functions ---
+    async function fetchGameData(gameId) {
+        try {
+            const response = await fetch(`${API_URL}/${gameId}`);
+            if (response.status === 404) return null;
+            if (!response.ok) {
+                const text = await response.text();
+                throw new Error(`Failed to fetch game data: ${response.statusText}. Response: ${text}`);
+            }
+            const data = await response.json();
+            return data;
+        } catch (e) {
+            console.error(e);
+            return null;
+        }
+    }
+
+    async function updateGameData(gameId, data) {
+        try {
+            const response = await fetch(`${API_URL}/${gameId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            if (!response.ok) {
+                const text = await response.text();
+                throw new Error(`Failed to update game data: ${response.statusText}. Response: ${text}`);
+            }
+            return response.json();
+        } catch (e) {
+            console.error(e);
+            return null;
+        }
+    }
+
+    async function createGameData(data) {
+        try {
+            const response = await fetch(API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data)
+            });
+            if (!response.ok) {
+                const text = await response.text();
+                throw new Error(`Failed to create game data: ${response.statusText}. Response: ${text}`);
+            }
+            const result = await response.json();
+            return result.id;
+        } catch (e) {
+            console.error(e);
+            return null;
+        }
+    }
+
+    // --- State Management and UI Rendering ---
+    function render() {
+        appContainer.innerHTML = '';
+        if (view === 'home') {
+            renderHome();
+        } else if (view === 'createGame') {
+            renderCreateGame();
+        } else if (view === 'lobby') {
+            renderLobby();
+        } else if (view === 'game') {
+            renderGame();
+        } else if (view === 'leaderboard') {
+            renderLeaderboard();
+        }
+    }
+
+    // Main sync loop to simulate real-time updates
+    async function syncGameData() {
+        if (!gameId || isSyncing) return;
+        isSyncing = true;
+        const latestData = await fetchGameData(gameId);
+        if (latestData) {
+            gameData = latestData;
+            userBoard = gameData.boards[userId];
+            if (gameData.status === 'in-progress' && view !== 'game') {
+                view = 'game';
+            } else if (gameData.status === 'finished' && view !== 'leaderboard') {
+                view = 'leaderboard';
+            } else if (gameData.status === 'lobby' && view !== 'lobby') {
+                view = 'lobby';
+            }
+            render();
+        } else if (gameData) { // Game data existed before but is now gone
+            gameData = null;
+            view = 'home';
+            error = "The game no longer exists. It may have been deleted.";
+            render();
+        }
+        isSyncing = false;
+        setTimeout(syncGameData, 1000); // Poll every 1 second for updates
+    }
+    
+    // Displays a dynamic message box
+    function showMessage(message, isError = false) {
+        const messageBox = document.createElement('div');
+        messageBox.className = `p-4 mt-4 rounded-xl font-bold text-center ${isError ? 'bg-red-600' : 'bg-green-600'}`;
+        messageBox.textContent = message;
+        appContainer.appendChild(messageBox);
+        setTimeout(() => messageBox.remove(), 5000);
+    }
+
+    // --- UI Rendering Functions ---
+    function renderHome() {
+        appContainer.innerHTML = `
+            <div class="flex flex-col items-center justify-center bg-gray-900 text-white p-4">
+                <div class="bg-gray-800 p-8 rounded-2xl shadow-xl w-full max-w-md text-center border border-gray-700">
+                    <h1 class="text-4xl md:text-5xl font-extrabold text-indigo-400 mb-6">BINGO BLAST</h1>
+                    <p class="text-sm text-gray-400 mb-6">Your unique ID: <span class="font-mono text-xs">${userId}</span></p>
+                    ${error ? `<p class="text-red-400 mb-4 font-bold">${error}</p>` : ''}
+                    <input type="text" id="userNameInput" placeholder="Enter your name" class="w-full p-3 mb-4 rounded-lg bg-gray-700 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                    <button id="createGameBtn" class="w-full mb-4 px-6 py-3 rounded-xl bg-indigo-600 text-white font-bold text-lg shadow-lg hover:bg-indigo-700 transition duration-300 transform hover:scale-105">Create New Game</button>
+                    <div class="flex items-center my-4">
+                        <div class="flex-grow border-t border-gray-600"></div>
+                        <span class="flex-shrink mx-4 text-gray-500">OR</span>
+                        <div class="flex-grow border-t border-gray-600"></div>
+                    </div>
+                    <input type="text" id="gameIdInput" placeholder="Enter Game ID to Join" class="w-full p-3 mb-4 rounded-lg bg-gray-700 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                    <button id="joinGameBtn" class="w-full px-6 py-3 rounded-xl bg-green-600 text-white font-bold text-lg shadow-lg hover:bg-green-700 transition duration-300 transform hover:scale-105">Join Game</button>
+                </div>
+            </div>
+        `;
+
+        document.getElementById('createGameBtn').addEventListener('click', () => {
+            userName = document.getElementById('userNameInput').value.trim();
+            if (userName === '') {
+                error = 'Please enter your name.';
+                render();
+            } else {
+                view = 'createGame';
+                render();
+            }
+        });
+
+        document.getElementById('joinGameBtn').addEventListener('click', async () => {
+            userName = document.getElementById('userNameInput').value.trim();
+            gameId = document.getElementById('gameIdInput').value.trim();
+            if (userName === '' || gameId === '') {
+                error = 'Please enter your name and the Game ID.';
+                render();
+                return;
+            }
+            error = '';
+
+            const existingGame = await fetchGameData(gameId);
+            if (!existingGame) {
+                error = "Game not found. Please check the ID.";
+                render();
+                return;
+            }
+
+            if (existingGame.players.some(player => player.id === userId)) {
+                view = 'lobby';
+                syncGameData();
+            } else {
+                existingGame.players.push({ id: userId, name: userName });
+                await updateGameData(gameId, existingGame);
+                view = 'lobby';
+                syncGameData();
+            }
+        });
+    }
+
+    function renderCreateGame() {
+        appContainer.innerHTML = `
+            <div class="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white p-4">
+                <div class="bg-gray-800 p-8 rounded-2xl shadow-xl w-full max-w-md text-center border border-gray-700">
+                    <h2 class="text-3xl font-bold text-indigo-400 mb-6">Create Game</h2>
+                    <p class="text-gray-400 mb-4">Choose your board size:</p>
+                    <div class="flex justify-center items-center space-x-4 mb-6">
+                        <button class="size-btn px-5 py-2 rounded-xl text-lg font-bold transition duration-300 ${boardSize === 5 ? 'bg-indigo-600 text-white shadow-xl' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}" data-size="5">5x5</button>
+                        <button class="size-btn px-5 py-2 rounded-xl text-lg font-bold transition duration-300 ${boardSize === 7 ? 'bg-indigo-600 text-white shadow-xl' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}" data-size="7">7x7</button>
+                        <button class="size-btn px-5 py-2 rounded-xl text-lg font-bold transition duration-300 ${boardSize === 10 ? 'bg-indigo-600 text-white shadow-xl' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}" data-size="10">10x10</button>
+                    </div>
+                    <button id="createGameFinalBtn" class="w-full px-6 py-3 rounded-xl bg-indigo-600 text-white font-bold text-lg shadow-lg hover:bg-indigo-700 transition duration-300 transform hover:scale-105">Create Game</button>
+                </div>
+            </div>
+        `;
+        document.querySelectorAll('.size-btn').forEach(button => {
+            button.addEventListener('click', (e) => {
+                boardSize = parseInt(e.target.dataset.size);
+                render();
+            });
+        });
+        document.getElementById('createGameFinalBtn').addEventListener('click', async () => {
+            error = '';
+            const newGame = {
+                hostId: userId,
+                boardSize: boardSize,
+                status: 'lobby',
+                calledNumbers: [],
+                players: [{ id: userId, name: userName }],
+                boards: {},
+                turnIndex: 0,
+                leaderboard: [],
+            };
+            const newGameId = await createGameData(newGame);
+            if (newGameId) {
+                gameId = newGameId;
+                view = 'lobby';
+                syncGameData();
+            } else {
+                error = "Failed to create game. Please try again.";
+                render();
+            }
+        });
+    }
+
+    function renderLobby() {
+        if (!gameData) return;
+        const isHost = gameData.hostId === userId;
+        appContainer.innerHTML = `
+            <div class="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white p-4">
+                <div class="bg-gray-800 p-8 rounded-2xl shadow-xl w-full max-w-md text-center border border-gray-700">
+                    <h2 class="text-3xl font-bold text-indigo-400 mb-4">Lobby</h2>
+                    <p class="text-xl text-gray-300 mb-2">Game ID:</p>
+                    <p class="text-4xl font-extrabold text-yellow-400 mb-6 tracking-wider">${gameId}</p>
+                    <p class="text-gray-400 mb-4">Share this code with your friends!</p>
+                    <h3 class="text-2xl font-semibold mb-3">Players (${gameData.players.length})</h3>
+                    <ul class="list-disc list-inside text-left text-gray-300 mb-6">
+                        ${gameData.players.map(player => `<li class="text-lg">${player.name} ${player.id === gameData.hostId ? '(Host)' : ''}</li>`).join('')}
+                    </ul>
+                    ${isHost ? `
+                        <button id="startGameBtn" class="w-full px-6 py-3 rounded-xl bg-green-600 text-white font-bold text-lg shadow-lg hover:bg-green-700 transition duration-300 transform hover:scale-105 disabled:bg-gray-500 disabled:cursor-not-allowed" ${gameData.players.length < 2 ? 'disabled' : ''}>
+                            ${gameData.players.length < 2 ? 'Waiting for players...' : 'Start Game'}
+                        </button>
+                    ` : `
+                        <p class="text-gray-400 italic">Waiting for the host to start the game...</p>
+                    `}
+                </div>
+            </div>
+        `;
+        if (isHost) {
+            document.getElementById('startGameBtn').addEventListener('click', async () => {
+                const updatedGame = { ...gameData };
+                for (const player of updatedGame.players) {
+                    updatedGame.boards[player.id] = { board: generateBoard(updatedGame.boardSize), lines: 0 };
+                }
+                updatedGame.status = 'in-progress';
+                updatedGame.turnIndex = 0;
+                await updateGameData(gameId, updatedGame);
+                syncGameData();
+            });
+        }
+    }
+
+    function renderGame() {
+        if (!gameData || !userBoard) return;
+        const isMyTurn = gameData.players[gameData.turnIndex]?.id === userId;
+        const boardSize = gameData.boardSize;
+        const rangeMax = boardSize * boardSize;
+
+        appContainer.innerHTML = `
+            <div class="flex flex-col items-center min-h-screen bg-gray-900 text-white p-4">
+                <h2 class="text-3xl md:text-4xl font-bold text-indigo-400 mb-4">Game: ${gameId}</h2>
+                <div class="text-lg md:text-xl text-gray-300 mb-6 text-center">
+                    ${isMyTurn ? `<p class="text-green-400 font-bold">It's your turn!</p>` : `<p>It's <span class="font-semibold text-yellow-400">${gameData.players[gameData.turnIndex]?.name}'s</span> turn.</p>`}
+                </div>
+
+                <div class="bg-gray-800 p-6 rounded-2xl shadow-xl w-full max-w-sm mb-6 border border-gray-700">
+                    <h3 class="text-2xl font-bold mb-3">Call a Number (1-${rangeMax})</h3>
+                    <div class="flex items-center space-x-2">
+                        <input type="number" id="numberInput" class="w-full p-3 rounded-lg bg-gray-700 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500" min="1" max="${rangeMax}" />
+                        <button id="callNumberBtn" class="px-6 py-3 rounded-xl bg-indigo-600 text-white font-bold shadow-lg hover:bg-indigo-700 transition duration-300 disabled:bg-gray-500" ${!isMyTurn ? 'disabled' : ''}>Call</button>
+                    </div>
+                    ${error ? `<p class="text-red-400 mt-2 font-bold">${error}</p>` : ''}
+                    <p class="text-gray-400 mt-4">Called Numbers (${gameData.calledNumbers.length}): ${gameData.calledNumbers.join(', ')}</p>
+                </div>
+
+                <div class="bg-gray-800 p-6 rounded-2xl shadow-xl w-full max-w-2xl mb-6 border border-gray-700">
+                    <h3 class="text-2xl font-bold text-center mb-4">Your Board</h3>
+                    <div class="bingo-grid" style="--grid-size: ${boardSize};">
+                        ${userBoard.board.map(num => `
+                            <div class="bingo-cell ${gameData.calledNumbers.includes(num) ? 'bg-green-600 text-white scale-105' : 'bg-gray-700 text-gray-300'}">
+                                ${num}
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            </div>
+        `;
+
+        document.getElementById('callNumberBtn').addEventListener('click', async () => {
+            const numberInput = document.getElementById('numberInput');
+            const number = parseInt(numberInput.value);
+            if (isNaN(number) || number < 1 || number > rangeMax) {
+                error = "Please enter a valid number.";
+                render();
+                return;
+            }
+            error = '';
+
+            if (gameData.calledNumbers.includes(number)) {
+                error = "This number has already been called.";
+                render();
+                return;
+            }
+
+            const nextTurnIndex = (gameData.turnIndex + 1) % gameData.players.length;
+            const updatedGame = {
+                ...gameData,
+                calledNumbers: [...gameData.calledNumbers, number],
+                turnIndex: nextTurnIndex
+            };
+            const updatedBoard = { ...userBoard, lines: checkForBingo(userBoard.board, gameData.boardSize, updatedGame.calledNumbers) };
+            updatedGame.boards[userId] = updatedBoard;
+
+            if (updatedBoard.lines >= gameData.boardSize) {
+                updatedGame.status = 'finished';
+                const leaderboard = updatedGame.players.map(p => ({
+                    name: p.name,
+                    lines: checkForBingo(updatedGame.boards[p.id].board, updatedGame.boardSize, updatedGame.calledNumbers),
+                    isWinner: p.id === userId
+                })).sort((a, b) => b.lines - a.lines);
+                updatedGame.leaderboard = leaderboard;
+            }
+
+            await updateGameData(gameId, updatedGame);
+            numberInput.value = '';
+            syncGameData();
+        });
+    }
+
+    function renderLeaderboard() {
+        if (!gameData) return;
+        const sortedLeaderboard = [...gameData.leaderboard].sort((a, b) => b.lines - a.lines);
+        appContainer.innerHTML = `
+            <div class="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white p-4">
+                <div class="bg-gray-800 p-8 rounded-2xl shadow-xl w-full max-w-md text-center border border-gray-700">
+                    <h2 class="text-4xl font-extrabold text-indigo-400 mb-6">Game Over!</h2>
+                    <h3 class="text-2xl font-bold mb-4">Leaderboard</h3>
+                    <ul class="space-y-3 mb-6">
+                        ${sortedLeaderboard.map((player, index) => `
+                            <li class="p-4 rounded-xl shadow-lg border-2
+                                ${index === 0 ? 'bg-yellow-500 text-black border-yellow-400 font-extrabold text-xl' : ''}
+                                ${index === 1 ? 'bg-gray-400 text-black border-gray-300 font-semibold' : ''}
+                                ${index === 2 ? 'bg-orange-600 text-white border-orange-500 font-semibold' : ''}
+                                ${index > 2 ? 'bg-gray-700 text-gray-200 border-gray-600' : ''}">
+                                <span class="font-bold mr-2">#${index + 1}</span> ${player.name} - ${player.lines} lines
+                            </li>
+                        `).join('')}
+                    </ul>
+                    <button id="playAgainBtn" class="w-full px-6 py-3 rounded-xl bg-green-600 text-white font-bold text-lg shadow-lg hover:bg-green-700 transition duration-300 transform hover:scale-105">Play Again</button>
+                </div>
+            </div>
+        `;
+        document.getElementById('playAgainBtn').addEventListener('click', () => {
+            view = 'home';
+            gameId = '';
+            gameData = null;
+            userBoard = null;
+            render();
+        });
+    }
+
+    window.onload = () => {
+        userId = localStorage.getItem('bingoUserId') || uuidv4();
+        localStorage.setItem('bingoUserId', userId);
+        syncGameData(); // Start sync loop to initialize the view
+    };
+</script>
 </body>
 </html>
