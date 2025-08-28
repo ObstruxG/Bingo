@@ -342,7 +342,7 @@
     function Game({ gameId }) {
       const { db, userId, setGameState } = useContext(AppContext);
       const [game, setGame] = useState(null);
-      const [myBoard, setMyBoard] = useState([]);
+      const [myBoard, setMyBoard] = useState(new Set());
       const [markedNumbers, setMarkedNumbers] = useState(new Set());
       const [myLines, setMyLines] = useState(0);
       const [loading, setLoading] = useState(true);
@@ -526,7 +526,7 @@
           )}
           {state.myBoard.length > 0 && (
             <div className="bingo-grid-container grid p-4 bg-gray-700 rounded-xl shadow-inner mx-auto"
-                 style={{ gridTemplateColumns: `repeat(${state.boardSize}, minmax(0, 1fr))`, "--grid-size": state.boardSize }}>
+                 style={{ '--grid-size': state.boardSize }}>
               {state.myBoard.flat().map((number, index) => (
                 <div
                   key={index}
