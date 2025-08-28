@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Multiplayer Bingo</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: #0d1117; /* Dark theme background */
+      color: #c9d1d9; /* Light gray text */
+    }
+    .animate-fade-in {
+      animation: fadeIn 0.5s ease-in-out;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .bingo-grid-container {
+      display: grid;
+      gap: 0.5rem;
+      grid-template-columns: repeat(var(--grid-size), minmax(0, 1fr));
+    }
+    .bingo-cell {
+      aspect-ratio: 1 / 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      transition: all 0.3s ease-in-out;
+      border-radius: 0.5rem;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="module">
+    import React, { useState, useEffect, useRef, useReducer, createContext, useContext } from 'https://esm.sh/react@18.2.0';
+    import ReactDOM from 'https://esm.sh/react-dom@18.2.0/client';
+
+    // Firebase Imports
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+    import { getAuth, signInAnonymously, signInWithCustomToken } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+    import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, updateDoc, deleteDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+
+    // --- Global Context for Firebase and Auth ---
+    const AppContext = createContext();
+
+    // --- Main App Component ---
+    function App() {
+      const [db, setDb] = useState(null);
+      const [auth, setAuth] = useState(null);
+      const [userId, setUserId] = useState(null);
+      const [isAuthReady, setIsAuthReady] = useState(false);
+      const [gameId, setGameId] = useState(null);
+      const [gameState, setGameState] = useState('lobby'); // 'lobby', 'game', 'leaderboard'
+      const [loading, setLoading] = useState(true);
+
+      // Initialize Firebase and handle authentication
+      useEffect(() => {
+        const initFirebase = async () => {
+          try {
+            const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+            const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+            const app = initializeApp(firebaseConfig);
+            const firestoreDb = getFirestore(app);
+            const firestoreAuth = getAuth(app);
+
+            // Sign in the user
+            if (initialAuthToken) {
+              await signInWithCustomToken(firestoreAuth, initialAuthToken);
+            } else {
+              await signInAnonymously(firestoreAuth);
+            }
+
+            // Listen for auth state changes to get the user ID
+            const unsubscribeAuth = firestoreAuth.onAuthStateChanged(user => {
+              if (user) {
+                setUserId(user.uid);
+                setIsAuthReady(true);
+              }
+            });
+
+            setDb(firestoreDb);
+            setAuth(firestoreAuth);
+            setLoading(false);
+
+            return () => unsubscribeAuth();
+          } catch (error) {
+            console.error('Failed to initialize Firebase or authenticate:', error);
+            setLoading(false);
+          }
+        };
+        initFirebase();
+      }, []);
+
+      if (loading || !isAuthReady) {
+        return (
+          <div className="flex items-center justify-center min-h-screen bg-gray-900 text-white">
+            <div className="animate-spin rounded-full h-32 w-32 border-t-2 border-b-2 border-purple-500"></div>
+            <p className="ml-4 text-xl">Loading...</p>
+          </div>
+        );
+      }
+
+      return (
+        <AppContext.Provider value={{ db, auth, userId, isAuthReady, setGameId, setGameState }}>
+          <main className="bg-gray-950 text-white min-h-screen font-sans antialiased flex flex-col items-center p-4 md:p-8">
+            <header className="mb-8 text-center">
+              <h1 className="text-4xl md:text-6xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-600">
+                Multiplayer Bingo
+              </h1>
+              <p className="mt-2 text-gray-400 text-lg md:text-xl">
+                Create a room and play with your friends!
+              </p>
+            </header>
+            {gameState === 'lobby' && <Lobby />}
+            {gameState === 'game' && <Game gameId={gameId} />}
+            {gameState === 'leaderboard' && <Leaderboard gameId={gameId} />}
+          </main>
+        </AppContext.Provider>
+      );
+    }
+
+    // --- Lobby Component ---
+    function Lobby() {
+      const { db, userId, setGameId, setGameState, isAuthReady } = useContext(AppContext);
+      const [boardSize, setBoardSize] = useState(5);
+      const [gameCode, setGameCode] = useState('');
+      const [players, setPlayers] = useState([]);
+      const [isHost, setIsHost] = useState(false);
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const gameRef = useRef(null);
+
+      useEffect(() => {
+        if (!isAuthReady || !gameCode) return;
+        const gameDocRef = doc(db, 'artifacts', typeof __app_id !== 'undefined' ? __app_id : 'default-app-id', 'public', 'data', 'bingo_games', gameCode);
+        gameRef.current = gameDocRef;
+
+        const unsubscribe = onSnapshot(gameDocRef, async (docSnap) => {
+          if (docSnap.exists()) {
+            const gameData = docSnap.data();
+            setPlayers(Object.values(gameData.players || {}));
+            if (gameData.status === 'playing') {
+              setGameId(gameCode);
+              setGameState('game');
+            } else if (gameData.status === 'finished') {
+              setGameId(gameCode);
+              setGameState('leaderboard');
+            }
+          } else {
+            setError('Game not found.');
+          }
+        });
+
+        return () => unsubscribe();
+      }, [gameCode, db, isAuthReady, setGameId, setGameState]);
+
+      const handleCreateGame = async () => {
+        if (!isAuthReady || loading) return;
+        setLoading(true);
+        setError('');
+        const newGameId = Math.random().toString(36).substring(2, 8).toUpperCase();
+        const newGameDocRef = doc(db, 'artifacts', typeof __app_id !== 'undefined' ? __app_id : 'default-app-id', 'public', 'data', 'bingo_games', newGameId);
+
+        const player = {
+          id: userId,
+          isHost: true,
+          name: `Player ${Math.floor(Math.random() * 1000)}`,
+        };
+
+        try {
+          await setDoc(newGameDocRef, {
+            boardSize: boardSize,
+            createdAt: serverTimestamp(),
+            hostId: userId,
+            status: 'lobby',
+            players: { [userId]: player },
+            calledNumbers: [],
+          });
+          setGameCode(newGameId);
+          setIsHost(true);
+        } catch (e) {
+          console.error('Error creating document:', e);
+          setError('Failed to create game. Please try again.');
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const handleJoinGame = async () => {
+        if (!isAuthReady || loading) return;
+        setLoading(true);
+        setError('');
+        const gameDocRef = doc(db, 'artifacts', typeof __app_id !== 'undefined' ? __app_id : 'default-app-id', 'public', 'data', 'bingo_games', gameCode);
+
+        try {
+          const docSnap = await getDoc(gameDocRef);
+          if (docSnap.exists() && docSnap.data().status === 'lobby') {
+            const player = {
+              id: userId,
+              isHost: false,
+              name: `Player ${Math.floor(Math.random() * 1000)}`,
+            };
+            await updateDoc(gameDocRef, { [`players.${userId}`]: player });
+          } else {
+            setError('Game not found or has already started.');
+          }
+        } catch (e) {
+          console.error('Error joining game:', e);
+          setError('Failed to join game. Please check the code.');
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const handleStartGame = async () => {
+        if (!isHost || !gameRef.current || loading) return;
+        setLoading(true);
+        setError('');
+        try {
+          const gameData = (await getDoc(gameRef.current)).data();
+          const players = Object.keys(gameData.players);
+          const boardSize = gameData.boardSize;
+          const boardRange = boardSize * boardSize;
+          const updates = {
+            status: 'playing',
+            turn: players[0],
+            boards: {},
+            playerLines: {},
+          };
+
+          players.forEach(playerId => {
+            const allNumbers = Array.from({ length: boardRange }, (_, i) => i + 1);
+            shuffle(allNumbers);
+            const board = Array.from({ length: boardSize }, (_, rowIdx) =>
+              allNumbers.slice(rowIdx * boardSize, (rowIdx + 1) * boardSize)
+            );
+            updates.boards[playerId] = JSON.stringify(board);
+            updates.playerLines[playerId] = 0;
+          });
+          await updateDoc(gameRef.current, updates);
+        } catch (e) {
+          console.error('Error starting game:', e);
+          setError('Failed to start game.');
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const shuffle = (array) => {
+        for (let i = array.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [array[i], array[j]] = [array[j], array[i]];
+        }
+      };
+
+      return (
+        <div className="bg-gray-800 rounded-xl shadow-lg p-6 md:p-8 w-full max-w-lg space-y-6 animate-fade-in">
+          <h2 className="text-2xl md:text-3xl font-semibold text-center text-gray-200">
+            Create or Join a Game
+          </h2>
+          <div className="space-y-4">
+            <label className="block text-gray-400">Board Size (e.g., 5, 7, 10):</label>
+            <input
+              type="number"
+              value={boardSize}
+              onChange={(e) => setBoardSize(Number(e.target.value))}
+              className="w-full bg-gray-700 text-white rounded-lg p-3 focus:ring-2 focus:ring-purple-500 focus:outline-none transition-colors duration-200"
+              min="3" max="15"
+            />
+            <button
+              onClick={handleCreateGame}
+              disabled={loading || !isAuthReady}
+              className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white font-bold py-3 px-6 rounded-lg transition-all duration-300 shadow-lg transform hover:scale-105 disabled:opacity-50"
+            >
+              {loading ? 'Creating...' : 'Create New Game'}
+            </button>
+          </div>
+          <div className="flex items-center justify-center space-x-2"><span className="text-gray-500">- OR -</span></div>
+          <div className="space-y-4">
+            <label className="block text-gray-400">Join Game with Code:</label>
+            <div className="flex space-x-2">
+              <input
+                type="text"
+                value={gameCode}
+                onChange={(e) => setGameCode(e.target.value.toUpperCase())}
+                className="flex-grow bg-gray-700 text-white rounded-lg p-3 focus:ring-2 focus:ring-purple-500 focus:outline-none transition-colors duration-200 uppercase tracking-widest text-center font-mono"
+                placeholder="GAMECODE"
+              />
+              <button
+                onClick={handleJoinGame}
+                disabled={loading || !isAuthReady || !gameCode}
+                className="bg-purple-500 hover:bg-purple-600 text-white font-bold py-3 px-6 rounded-lg transition-colors duration-200 shadow-lg transform hover:scale-105 disabled:opacity-50"
+              >
+                Join
+              </button>
+            </div>
+          </div>
+          {gameCode && (
+            <div className="p-4 bg-gray-700 rounded-lg text-center shadow-inner">
+              <h3 className="text-xl font-bold text-gray-200">Game Code: {gameCode}</h3>
+              <p className="text-sm text-gray-400 mt-1">Share this code with your friends!</p>
+            </div>
+          )}
+          {error && <p className="text-red-500 text-center mt-4">{error}</p>}
+          {players.length > 0 && (
+            <div className="space-y-4">
+              <h3 className="text-xl font-semibold text-gray-300">Players in Lobby ({players.length}):</h3>
+              <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {players.map(player => (
+                  <li key={player.id} className="bg-gray-700 text-gray-300 p-2 rounded-lg flex items-center justify-between">
+                    <span>{player.name}</span>
+                    {player.isHost && <span className="text-sm font-semibold text-purple-400">Host</span>}
+                  </li>
+                ))}
+              </ul>
+              {isHost && players.length > 1 && (
+                <button
+                  onClick={handleStartGame}
+                  disabled={loading}
+                  className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-lg transition-colors duration-200 shadow-lg transform hover:scale-105 disabled:opacity-50"
+                >
+                  Start Game
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // --- Game Component ---
+    function Game({ gameId }) {
+      const { db, userId, setGameState } = useContext(AppContext);
+      const [game, setGame] = useState(null);
+      const [myBoard, setMyBoard] = useState([]);
+      const [markedNumbers, setMarkedNumbers] = useState(new Set());
+      const [myLines, setMyLines] = useState(0);
+      const [loading, setLoading] = useState(true);
+      const [turnNumber, setTurnNumber] = useState('');
+      const [message, setMessage] = useState('');
+      const boardSizeRef = useRef(null);
+
+      const [state, dispatch] = useReducer((state, action) => {
+        switch (action.type) {
+          case 'INIT_GAME':
+            return {
+              ...state,
+              boardSize: action.payload.boardSize,
+              myBoard: JSON.parse(action.payload.myBoard),
+              isHost: action.payload.isHost,
+              hostId: action.payload.hostId,
+            };
+          case 'UPDATE_GAME_STATE':
+            return {
+              ...state,
+              status: action.payload.status,
+              turn: action.payload.turn,
+              calledNumbers: action.payload.calledNumbers,
+              playerLines: action.payload.playerLines,
+              players: action.payload.players,
+            };
+          case 'UPDATE_MARKED_NUMBERS':
+            return { ...state, markedNumbers: action.payload };
+          case 'UPDATE_MY_LINES':
+            return { ...state, myLines: action.payload };
+          default:
+            return state;
+        }
+      }, {
+        boardSize: 0, myBoard: [], status: 'playing', turn: '', calledNumbers: [], playerLines: {}, players: {},
+        isHost: false, hostId: '', markedNumbers: new Set(), myLines: 0,
+      });
+
+      useEffect(() => {
+        if (!db || !gameId) return;
+        const gameDocRef = doc(db, 'artifacts', typeof __app_id !== 'undefined' ? __app_id : 'default-app-id', 'public', 'data', 'bingo_games', gameId);
+        const unsubscribe = onSnapshot(gameDocRef, (docSnap) => {
+          if (docSnap.exists()) {
+            const gameData = docSnap.data();
+            dispatch({ type: 'UPDATE_GAME_STATE', payload: gameData });
+            if (loading) {
+              boardSizeRef.current = gameData.boardSize;
+              const myBoardString = gameData.boards[userId];
+              if (myBoardString) {
+                dispatch({ type: 'INIT_GAME', payload: {
+                    boardSize: gameData.boardSize, myBoard: myBoardString,
+                    isHost: gameData.hostId === userId, hostId: gameData.hostId,
+                  }
+                });
+                setLoading(false);
+              }
+            }
+          } else {
+            setGameState('lobby');
+          }
+        });
+        return () => unsubscribe();
+      }, [db, gameId, userId, setGameState, loading]);
+
+      useEffect(() => {
+        if (!state.myBoard.length) return;
+        let lines = 0;
+        const board = state.myBoard;
+        const size = state.boardSize;
+        for (let r = 0; r < size; r++) {
+          if (board[r].every(num => state.markedNumbers.has(num))) lines++;
+        }
+        for (let c = 0; c < size; c++) {
+          let colComplete = true;
+          for (let r = 0; r < size; r++) {
+            if (!state.markedNumbers.has(board[r][c])) {
+              colComplete = false;
+              break;
+            }
+          }
+          if (colComplete) lines++;
+        }
+        let diag1Complete = true;
+        for (let i = 0; i < size; i++) {
+          if (!state.markedNumbers.has(board[i][i])) {
+            diag1Complete = false;
+            break;
+          }
+        }
+        if (diag1Complete) lines++;
+        let diag2Complete = true;
+        for (let i = 0; i < size; i++) {
+          if (!state.markedNumbers.has(board[i][size - 1 - i])) {
+            diag2Complete = false;
+            break;
+          }
+        }
+        if (diag2Complete) lines++;
+
+        if (lines !== myLines) {
+          setMyLines(lines);
+          updateMyLinesInDb(lines);
+          if (lines >= size) { updateGameStatus('finished'); }
+        }
+      }, [state.myBoard, state.markedNumbers]);
+
+      const handleCallNumber = async () => {
+        if (state.turn !== userId || !turnNumber) {
+          setMessage("It's not your turn or you haven't entered a number.");
+          return;
+        }
+        const number = parseInt(turnNumber, 10);
+        if (isNaN(number) || state.calledNumbers.includes(number)) {
+          setMessage("Please enter a valid, uncalled number.");
+          return;
+        }
+        setMessage(''); setTurnNumber('');
+        const gameDocRef = doc(db, 'artifacts', typeof __app_id !== 'undefined' ? __app_id : 'default-app-id', 'public', 'data', 'bingo_games', gameId);
+        const currentPlayers = Object.keys(state.players);
+        const myIndex = currentPlayers.indexOf(userId);
+        const nextTurnIndex = (myIndex + 1) % currentPlayers.length;
+        const nextTurnPlayerId = currentPlayers[nextTurnIndex];
+        try {
+          await updateDoc(gameDocRef, {
+            calledNumbers: [...state.calledNumbers, number],
+            turn: nextTurnPlayerId,
+          });
+        } catch (e) {
+          console.error('Error calling number:', e);
+          setMessage('Failed to call number. Try again.');
+        }
+      };
+
+      const handleMarkNumber = (number) => {
+        if (state.calledNumbers.includes(number)) {
+          const newMarkedNumbers = new Set(state.markedNumbers);
+          if (newMarkedNumbers.has(number)) {
+            newMarkedNumbers.delete(number);
+          } else {
+            newMarkedNumbers.add(number);
+          }
+          dispatch({ type: 'UPDATE_MARKED_NUMBERS', payload: newMarkedNumbers });
+        }
+      };
+
+      const updateMyLinesInDb = async (lines) => {
+        if (!db || !gameId) return;
+        const gameDocRef = doc(db, 'artifacts', typeof __app_id !== 'undefined' ? __app_id : 'default-app-id', 'public', 'data', 'bingo_games', gameId);
+        try {
+          await updateDoc(gameDocRef, { [`playerLines.${userId}`]: lines, });
+        } catch (e) {
+          console.error('Error updating lines:', e);
+        }
+      };
+
+      const updateGameStatus = async (status) => {
+        if (!db || !gameId) return;
+        const gameDocRef = doc(db, 'artifacts', typeof __app_id !== 'undefined' ? __app_id : 'default-app-id', 'public', 'data', 'bingo_games', gameId);
+        try {
+          await updateDoc(gameDocRef, { status: status, });
+        } catch (e) { console.error('Error updating game status:', e); }
+      };
+
+      return (
+        <div className="bg-gray-800 rounded-xl shadow-lg p-6 md:p-8 w-full max-w-5xl space-y-6 animate-fade-in">
+          <h2 className="text-3xl font-bold text-center text-gray-200">Bingo Time!</h2>
+          <p className="text-center text-gray-400">
+            Board Size: <span className="font-semibold text-white">{state.boardSize}x{state.boardSize}</span>
+            <br />
+            Bingo Condition: <span className="font-semibold text-white">{state.boardSize} lines</span>
+          </p>
+          {state.status === 'playing' && (
+            <div className="text-center p-4 bg-gray-700 rounded-lg shadow-inner">
+              <p className="text-lg font-semibold text-purple-400 animate-pulse">
+                {state.turn === userId ? "It's your turn to call a number!" : `Waiting for ${state.players[state.turn]?.name} to call a number...`}
+              </p>
+              <p className="mt-2 text-gray-300">
+                Current Lines: <span className="font-bold">{myLines}</span>
+              </p>
+            </div>
+          )}
+          {state.myBoard.length > 0 && (
+            <div className="bingo-grid-container grid p-4 bg-gray-700 rounded-xl shadow-inner mx-auto"
+                 style={{ gridTemplateColumns: `repeat(${state.boardSize}, minmax(0, 1fr))`, "--grid-size": state.boardSize }}>
+              {state.myBoard.flat().map((number, index) => (
+                <div
+                  key={index}
+                  className={`
+                    bingo-cell
+                    ${state.calledNumbers.includes(number) ? 'bg-purple-600' : 'bg-gray-800'}
+                    ${state.markedNumbers.has(number) ? 'border-4 border-yellow-400 text-yellow-300 shadow-xl' : 'text-gray-200'}
+                  `}
+                  onClick={() => handleMarkNumber(number)}
+                >
+                  {number}
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="mt-8 space-y-4">
+            <h3 className="text-xl font-semibold text-center text-gray-300">Called Numbers</h3>
+            <div className="flex flex-wrap gap-2 justify-center max-h-40 overflow-y-auto p-2 bg-gray-700 rounded-lg">
+              {state.calledNumbers.map((num, idx) => (
+                <span key={idx} className="bg-purple-500 text-white text-xs font-bold px-2 py-1 rounded-full">{num}</span>
+              ))}
+            </div>
+            {state.turn === userId && (
+              <div className="flex flex-col sm:flex-row gap-4 items-center justify-center mt-6">
+                <input
+                  type="number"
+                  value={turnNumber}
+                  onChange={(e) => setTurnNumber(e.target.value)}
+                  className="w-full sm:w-1/2 bg-gray-700 text-white rounded-lg p-3 text-center focus:ring-2 focus:ring-purple-500 focus:outline-none"
+                  placeholder="Enter your number"
+                  min="1"
+                  max={boardSizeRef.current * boardSizeRef.current}
+                />
+                <button
+                  onClick={handleCallNumber}
+                  disabled={loading}
+                  className="w-full sm:w-auto bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-lg transition-colors duration-200 shadow-lg transform hover:scale-105 disabled:opacity-50"
+                >
+                  Call Number
+                </button>
+              </div>
+            )}
+            {message && <p className="text-red-500 text-center mt-4">{message}</p>}
+          </div>
+        </div>
+      );
+    }
+
+    // --- Leaderboard Component ---
+    function Leaderboard({ gameId }) {
+      const { db } = useContext(AppContext);
+      const [players, setPlayers] = useState([]);
+      const [loading, setLoading] = useState(true);
+
+      useEffect(() => {
+        if (!db || !gameId) return;
+        const fetchLeaderboard = async () => {
+          const gameDocRef = doc(db, 'artifacts', typeof __app_id !== 'undefined' ? __app_id : 'default-app-id', 'public', 'data', 'bingo_games', gameId);
+          const docSnap = await getDoc(gameDocRef);
+          if (docSnap.exists()) {
+            const gameData = docSnap.data();
+            const sortedPlayers = Object.values(gameData.players).sort((a, b) => {
+              const linesA = gameData.playerLines[a.id] || 0;
+              const linesB = gameData.playerLines[b.id] || 0;
+              return linesB - linesA;
+            });
+            setPlayers(sortedPlayers);
+          }
+          setLoading(false);
+        };
+        fetchLeaderboard();
+      }, [db, gameId]);
+
+      if (loading) {
+        return (
+          <div className="flex items-center justify-center text-white">
+            <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-purple-500"></div>
+            <p className="ml-4 text-xl">Loading Leaderboard...</p>
+          </div>
+        );
+      }
+
+      return (
+        <div className="bg-gray-800 rounded-xl shadow-lg p-6 md:p-8 w-full max-w-lg space-y-6 animate-fade-in">
+          <h2 className="text-3xl font-bold text-center text-gray-200">Leaderboard</h2>
+          <ul className="space-y-4">
+            {players.map((player, index) => (
+              <li key={player.id} className={`p-4 rounded-lg flex justify-between items-center transition-all duration-300 ${index === 0 ? 'bg-yellow-500 text-black shadow-lg transform scale-105' : 'bg-gray-700 text-white'}`}>
+                <span className="font-bold text-lg">{index + 1}. {player.name}</span>
+                <span className="text-sm">Lines: {player.lines}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      );
+    }
+    
+    // Render the App
+    const container = document.getElementById('root');
+    const root = ReactDOM.createRoot(container);
+    root.render(React.createElement(App));
+  </script>
+</body>
+</html>
