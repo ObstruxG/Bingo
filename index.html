@@ -21,7 +21,7 @@
     .bingo-grid-container {
       display: grid;
       gap: 0.5rem;
-      /* Corrected grid-template-columns to use the CSS variable */
+      /* Corrected to use the CSS variable */
       grid-template-columns: repeat(var(--grid-size), minmax(0, 1fr));
     }
     .bingo-cell {
@@ -46,7 +46,7 @@
     // Firebase Imports
     import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
     import { getAuth, signInAnonymously, signInWithCustomToken } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-    import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, updateDoc, deleteDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+    import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
 
     // --- Global Context for Firebase and Auth ---
     const AppContext = createContext();
@@ -588,11 +588,11 @@
           const docSnap = await getDoc(gameDocRef);
           if (docSnap.exists()) {
             const gameData = docSnap.data();
-            const sortedPlayers = Object.values(gameData.players).sort((a, b) => {
-              const linesA = gameData.playerLines[a.id] || 0;
-              const linesB = gameData.playerLines[b.id] || 0;
-              return linesB - linesA;
-            });
+            // Corrected player sorting logic
+            const sortedPlayers = Object.values(gameData.players).map(player => ({
+                ...player,
+                lines: gameData.playerLines[player.id] || 0
+            })).sort((a, b) => b.lines - a.lines);
             setPlayers(sortedPlayers);
           }
           setLoading(false);
